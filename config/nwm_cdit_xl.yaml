@@ -3,7 +3,7 @@ run_name: nwm_cdit_xl
 # training setup
 results_dir: logs
 train: True
-batch_size: 16
+batch_size: 4
 num_workers: 12
 model: CDiT-XL/2
 lr: 8e-5
@@ -19,28 +19,33 @@ distance:
   max_dist_cat: 64
 
 # action output params
-len_traj_pred: 64
+len_traj_pred: 8
 
 # dataset specific parameters
 image_size: 224
 datasets:
-  recon:
-    data_folder: data/recon
-    train: data_splits/recon/train/ # path to train folder with traj_names.txt
-    test: data_splits/recon/test/ # path to test folder with traj_names.txt
-    goals_per_obs: 4
-  tartan_drive:
-    data_folder: data/tartan
-    train: data_splits/tartan_drive/train/
-    test: data_splits/tartan_drive/test/
-    goals_per_obs: 4
-  sacson:
-    data_folder: data/sacson
-    train: data_splits/sacson/train
-    test: data_splits/sacson/test
-    goals_per_obs: 4
-  scand:
-    data_folder: data/scand
-    train: data_splits/scand/train
-    test: data_splits/scand/test
+  # recon:
+  #   data_folder: data/recon
+  #   train: data_splits/recon/train/ # path to train folder with traj_names.txt
+  #   test: data_splits/recon/test/ # path to test folder with traj_names.txt
+  #   goals_per_obs: 4
+  # tartan_drive:
+  #   data_folder: data/tartan
+  #   train: data_splits/tartan_drive/train/
+  #   test: data_splits/tartan_drive/test/
+  #   goals_per_obs: 4
+  # sacson:
+  #   data_folder: data/sacson
+  #   train: data_splits/sacson/train
+  #   test: data_splits/sacson/test
+  #   goals_per_obs: 4
+  # scand:
+  #   data_folder: data/scand
+  #   train: data_splits/scand/train
+  #   test: data_splits/scand/test
+  #   goals_per_obs: 4
+  epic_kitchens:
+    data_folder: data/epic_kitchens
+    train: data_splits/epic_kitchens/train
+    test: data_splits/epic_kitchens/test
     goals_per_obs: 4

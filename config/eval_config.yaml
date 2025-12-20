@@ -13,6 +13,10 @@ eval_len_traj_pred: 64
 eval_context_size: 4
 
 eval_datasets:
+  epic_kitchens:
+    data_folder: data/epic_kitchens/checkpoint
+    test: data_splits/epic_kitchens/test/
+    goals_per_obs: 4
   recon:
     data_folder: /checkpoint/amaia/video/amirbar/processed_datasets/recon
     test: data_splits/recon/test/

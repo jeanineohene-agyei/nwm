@@ -13,11 +13,67 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+import torch.nn.functional as F
 
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
+def foveate_image(x, fovea_frac=0.5):
+    """Divide an image into high resolution crop and low resolution full image
+
+    Args:
+        x: shape (N, C, H, W) tensor of input images
+        fovea_frac: fraction of image to crop for fovea (0.5 == half-width)
+
+    Returns:
+        x_global: (N, C, H_out, W_out)
+        x_fovea:  (N, C, H_out, W_out)
+    """
+    
+    _, _, H, W = x.shape
+    
+    crop_h, crop_w = int((H * fovea_frac)), int((W * fovea_frac))
+    
+    cy, cx = H // 2, W // 2
+    y1 = cy - crop_h // 2
+    y2 = cy + crop_h // 2
+    x1 = cx - crop_w // 2
+    x2 = cx + crop_w // 2
+
+    x_fovea = x[:, :, y1:y2, x1:x2]
+    x_fovea = F.interpolate(x_fovea, size=(H, W), mode='bilinear', align_corners=False)
+    
+    x_global = F.interpolate(x, scale_factor=fovea_frac, mode='bilinear', align_corners=False)
+    x_global = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=False)
+    
+    return x_global, x_fovea
+
+# def foveate_same_size(x, fovea_frac=0.5):
+#     """
+#     Return a foveated image with the SAME H,W as input:
+#     - center region kept high-res
+#     - outside region replaced with downsampled-then-upsampled version
+#     """
+#     N, C, H, W = x.shape
+#     crop_h, crop_w = int(H * fovea_frac), int(W * fovea_frac)
+
+#     # low-res version (still returned as HxW after upsampling)
+#     low = F.interpolate(x, size=(crop_h, crop_w), mode="bilinear", align_corners=False)
+#     low = F.interpolate(low, size=(H, W), mode="bilinear", align_corners=False)
+
+#     # center mask
+#     cy, cx = H // 2, W // 2
+#     y1, y2 = cy - crop_h // 2, cy + crop_h // 2
+#     x1, x2 = cx - crop_w // 2, cx + crop_w // 2
+
+#     mask = torch.zeros((N, 1, H, W), device=x.device, dtype=x.dtype)
+#     mask[:, :, y1:y2, x1:x2] = 1.0
+
+#     # keep center from x, periphery from low
+#     return mask * x + (1.0 - mask) * low
+
+    
 
 #################################################################################
 #               Embedding Layers for Timesteps and Class Labels                 #
@@ -152,11 +208,27 @@ class CDiT(nn.Module):
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.patch_size = patch_size
         self.num_heads = num_heads
+        
+        self.fuse_linear = nn.Linear(2 * hidden_size, hidden_size)
+        
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
+        # self.x_embedder_foveated = PatchEmbed(input_size // 2, patch_size, in_channels, hidden_size, bias=True)
+        
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = ActionEmbedder(hidden_size)
+        
         num_patches = self.x_embedder.num_patches
         self.pos_embed = nn.Parameter(torch.zeros(self.context_size + 1, num_patches, hidden_size), requires_grad=True) # for context and for predicted frame
+        
+        # self.num_global_patches = self.x_embedder.num_patches 
+        # self.num_fovea_patches = self.x_embedder.num_patches 
+        # print(self.num_fovea_patches)
+        # self.pos_embed_foveated = nn.Parameter(torch.zeros(self.context_size + 1, self.num_global_patches + self.num_fovea_patches, hidden_size), requires_grad=True)
+        
+        # print("pos_embed:", self.pos_embed.shape)
+        # print("pos_embed_foveated:", self.pos_embed_foveated.shape)
+
+        
         self.blocks = nn.ModuleList([CDiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.time_embedder = TimestepEmbedder(hidden_size)
@@ -173,6 +245,7 @@ class CDiT(nn.Module):
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
         nn.init.normal_(self.pos_embed, std=0.02)
+        # nn.init.normal_(self.pos_embed_foveated, std=0.02)
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
         w = self.x_embedder.proj.weight.data
@@ -216,6 +289,8 @@ class CDiT(nn.Module):
         c = self.out_channels
         p = self.x_embedder.patch_size[0]
         h = w = int(x.shape[1] ** 0.5)
+        # print(f"X xhape: {x.shape[1]}")
+        # print(f"H*W:{h*w}")
         assert h * w == x.shape[1]
 
         x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
@@ -230,9 +305,45 @@ class CDiT(nn.Module):
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
-        x = self.x_embedder(x) + self.pos_embed[self.context_size:]
+        # x = self.x_embedder(x) + self.pos_embed[self.context_size:]
+        
+        x_global, x_fovea = foveate_image(x)
+        
+        # print("x_global:", x_global.shape)
+        # print("x_fovea:", x_fovea.shape)
+
+        
+        global_patch = self.x_embedder(x_global)
+        fovea_patch = self.x_embedder(x_fovea)
+        
+        # x = torch.cat([global_patch, fovea_patch], dim=1) + self.pos_embed[self.context_size:]
+        # x = global_patch + fovea_patch
+        # x = x + self.pos_embed[self.context_size:]
+        
+        x = torch.cat([global_patch, fovea_patch], dim=-1)
+        x = self.fuse_linear(x)
+
+        # now x is safe to feed into the existing transformer
+        x = x + self.pos_embed[self.context_size:]
+
+        # x = torch.cat([global_patch, fovea_patch], dim=1)   # (N, 392, D)
+
+        # target_pos = self.pos_embed[self.context_size:].repeat(1, 2, 1) # (1, 392, D)
+        # x = x + target_pos
+
+        # print("global_patch:", global_patch.shape)
+        # print("fovea_patch:", fovea_patch.shape)
+        # print("concat x:", x.shape)
+        
+        # x_fov = foveate_same_size(x, fovea_frac=0.5)
+        # x = self.x_embedder(x_fov) + self.pos_embed[self.context_size:]
+
         x_cond = self.x_embedder(x_cond.flatten(0, 1)).unflatten(0, (x_cond.shape[0], x_cond.shape[1])) + self.pos_embed[:self.context_size]  # (N, T, D), where T = H * W / patch_size ** 2.flatten(1, 2)
         x_cond = x_cond.flatten(1, 2)
+        # print("x tokens:", x.shape[1])  # should be 196
+        # print("x_cond tokens:", x_cond.shape[1])  # should be context_size*196
+
+
         t = self.t_embedder(t[..., None])
         y = self.y_embedder(y) 
         time_emb = self.time_embedder(rel_t[..., None])
@@ -241,6 +352,9 @@ class CDiT(nn.Module):
         for block in self.blocks:
             x = block(x, c, x_cond)
         x = self.final_layer(x, c)
+        # print("tokens before unpatchify:", x.shape[1])
+        # print("sqrt(tokens):", int(x.shape[1] ** 0.5))
+
         x = self.unpatchify(x)
         return x
 

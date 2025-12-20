@@ -16,3 +16,6 @@ go_stanford:
 
 sacson:
   metric_waypoint_spacing: 0.255
+
+epic_kitchens:
+  metric_waypoint_spacing: 1.0
