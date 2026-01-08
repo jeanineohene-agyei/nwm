@@ -37,10 +37,22 @@ from models import CDiT_models
 from diffusion import create_diffusion
 from datasets import TrainingDataset
 from misc import transform
+from foveation import foveate_image
+
+from torchvision.utils import save_image
+import os
 
 #################################################################################
 #                             Training Helper Functions                         #
 #################################################################################
+@torch.no_grad()
+def decode_latents(vae, latents):
+    # latents: (B, 4, H/8, W/8)
+    latents = latents / 0.18215
+    imgs = vae.decode(latents).sample   # (-1..1)
+    imgs = imgs.clamp(-1, 1)
+    return imgs
+
 
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
@@ -277,20 +289,60 @@ def main(args):
                 with torch.no_grad():
                     # Map input images to latent space + normalize latents:
                     B, T = x.shape[:2]
-                    x = x.flatten(0,1)
-                    x = tokenizer.encode(x).latent_dist.sample().mul_(0.18215)
-                    x = x.unflatten(0, (B, T))
+                    x_flat = x.flatten(0,1)  # x_flat formerly x
+                    
+                    x_global_pix, x_fovea_pix = foveate_image(x_flat)
+                    
+                    lat_global = tokenizer.encode(x_global_pix).latent_dist.sample().mul_(0.18215)
+                    lat_fovea  = tokenizer.encode(x_fovea_pix ).latent_dist.sample().mul_(0.18215)
+                    
+                    lat_global = lat_global.unflatten(0, (B, T))   # (B, T, 4, H/8, W/8)
+                    lat_fovea  = lat_fovea.unflatten(0, (B, T))
+                    
+                    lat_target = tokenizer.encode(x_flat).latent_dist.sample().mul_(0.18215)  # lat_target formerly x
+                    lat_target = lat_target.unflatten(0, (B, T))
                 
                 num_goals = T - num_cond
-                x_start = x[:, num_cond:].flatten(0, 1)
-                x_cond = x[:, :num_cond].unsqueeze(1).expand(B, num_goals, num_cond, x.shape[2], x.shape[3], x.shape[4]).flatten(0, 1)
+                # x_start = x[:, num_cond:].flatten(0, 1)
+                x_start = lat_target[:, num_cond:].flatten(0, 1)
+                
+                 # contexts (condition frames)
+                x_global_ctx = lat_global[:, :num_cond]
+                x_fovea_ctx  = lat_fovea[:,  :num_cond]
+                
+                x_cond = torch.stack([x_global_ctx, x_fovea_ctx], dim=2)
+
+                # -----------------------------
+                # 7) Expand over prediction horizon
+                # -----------------------------
+                x_cond = x_cond.unsqueeze(1).expand(B, num_goals, num_cond, 2, lat_global.shape[2], lat_global.shape[3], lat_global.shape[4],).flatten(0, 1)
+
+                # final flatten to match diffusion API
+                # x_cond = x_cond.flatten(0, 1)
+            
+                # x_cond = x[:, :num_cond].unsqueeze(1).expand(B, num_goals, num_cond, x.shape[2], x.shape[3], x.shape[4]).flatten(0, 1)
+                
                 y = y.flatten(0, 1)
                 rel_t = rel_t.flatten(0, 1)
-                
                 t = torch.randint(0, diffusion.num_timesteps, (x_start.shape[0],), device=device)
                 model_kwargs = dict(y=y, x_cond=x_cond, rel_t=rel_t)
                 loss_dict = diffusion.training_losses(model, x_start, t, model_kwargs)
                 loss = loss_dict["loss"].mean()
+                
+                
+                if train_steps == 0 and rank == 0:
+                    os.makedirs("foveation_debug", exist_ok=True)
+
+                    # decode the first 4 context frames
+                    orig = decode_latents(tokenizer,
+                            tokenizer.encode(x[0, :4]).latent_dist.sample().mul_(0.18215))
+
+                    g = decode_latents(tokenizer, lat_global[0, :4])
+                    f = decode_latents(tokenizer, lat_fovea[0, :4])
+
+                    save_image((orig+1)*0.5, "foveation_debug/original.png")
+                    save_image((g+1)*0.5,    "foveation_debug/global.png")
+                    save_image((f+1)*0.5,    "foveation_debug/fovea.png")
 
             opt.zero_grad()
             if not bfloat_enable:
