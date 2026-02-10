@@ -29,7 +29,6 @@ wandb/
 # =====================
 # Datasets (LOCAL)
 # =====================
-data/
 datasets/
 data_splits/
 
