@@ -1,10 +1,58 @@
-__pycache__
-results
-diffusion/__pycache__
-logs
-.vscode
-.ipynb_checkpoints
-models
-nwm/data
-data_splits/**/dataset*.pkl
-data
+# =====================
+# Python / tooling
+# =====================
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.vscode/
+
+# =====================
+# Logs / outputs
+# =====================
+logs/
+results/
+eval_results/
+eval_epic/
+eval_epic_finetuned/
+eval_epic_no_finetune/
+eval_results/
+walking_results/
+
+# =====================
+# ML artifacts
+# =====================
+checkpoints/
+ckpts/
+runs/
+wandb/
+
+# =====================
+# Datasets (LOCAL)
+# =====================
+data/
+datasets/
+data_splits/
+
+EPIC-KITCHENS/
+ego4d_data/
+soft_fold/
+soft_fold_positions/
+aloha_static_cups_open/
+walk_frames/
+
+# Raw video
+*.mp4
+*.MP4
+
+# =====================
+# Model files
+# =====================
+*.pt
+*.pth
+*.ckpt
+*.pkl
+
+# =====================
+# Source clarity
+# =====================
+models/
