@@ -1,0 +1,124 @@
+No Gaze
+=================================================================
+Skateboard/scooter:
+- video_uid: 179a6ec1-ec19-453b-a9f5-3e1312c4fd58
+- has_gaze: false
+
+Roller skating:
+- video_uid: b1543ea3-e86b-4545-9195-f1bf83e02b41
+- has_gaze: false
+
+Football:
+- video_uid: dc708402-b918-4bef-b2ea-88bf22a7fb1f
+- has_gaze: false
+
+Attending a festival or fair:
+- video_uid: 13bbcf71-cc9d-40f9-b072-77841ea8b7a2
+- has_gaze: false
+
+Gardener:
+- video_uid: 1b782473-f0cd-4717-b127-b1b0995cd51b
+- has_gaze: false
+
+Mini golf:
+- video_uid: 24ec2a4a-943a-4855-81a2-1344ada16a22
+- has_gaze: false
+
+Riding motorcycle:
+- video_uid: 7bbebd35-f550-436f-92ac-02307a9fe138
+- has_gaze: false
+
+Golfing
+- video_uid: 8a6a3316-d682-4a76-81db-b244081765c9
+- has_gaze: false
+
+Cycling/jogging
+- video_uid: 8c6f9a64-259c-4a88-9632-81bdd4493f6c
+- has_gaze: false
+
+Walking on street
+- video_uid: 8d1c3e58-8705-48a8-9f02-ce7b00e9d863
+- has_gaze: false
+
+Walking the dog/pet
+- video_uid: 078f6bad-aa22-48bf-9df2-4d2f6ba7b556
+- has_gaze: false
+
+Indoor Navigation (walking) 
+- video_uid: 00aaf182-c2c5-4891-80f1-ef01b2bc9729
+- has_gaze: false
+
+Working in outdoor store
+- video_uid: 58fa49c8-226a-4013-aa0c-85a0a517ff64
+- has_gaze: false
+
+Clothes/other shopping
+- video_uid: 59764b58-1523-48b3-88d2-9fc07880e597
+- has_gaze: false
+
+Playing with pets
+- video_uid: 5eed1db0-2136-4c61-8122-06cfbba28c96
+- has_gaze: false
+
+Grocery shopping indoors
+- video_uid: 620b4f15-7c33-4888-8cc8-c4c1267a3c76
+- has_gaze: false
+
+Working out outside
+- video_uid: 686b4d50-3820-4157-bcf4-80d6feaebc7e"
+- has_gaze: false
+
+Farmer
+- video_uid: 68ab8d55-a4c5-4ca7-8f3a-ba74aaafa1c9
+- has_gaze: false
+
+Bike
+- video_uid: 6abc010d-be71-498d-af0b-15c5845d315f
+- has_gaze: false
+
+Flower Picking
+- video_uid: 78d7751d-36b9-473b-a1fb-9c14debbf61e
+- has_gaze: false
+
+Attending sporting events (watching and participating)
+- video_uid: a82af40e-2318-42ea-9167-5cc8f8111de1
+- has_gaze: false
+
+Drone flying
+- video_uid: 356661f5-767b-495d-95c7-03dcc46f85c6
+- has_gaze: false
+
+Attending a lecture/class
+- video_uid: 971de484-7b45-427f-8e5f-d5e110af055d
+- has_gaze: false
+
+Hiking
+- video_uid: 984c9fcb-525c-4514-b22d-9e440d121332
+- has_gaze: false
+
+Basketball
+- video_uid: c48a70f7-44a3-44aa-ac14-baf35e696e5c
+- has_gaze: false
+
+Gardening
+- video_uid: c67a0dc9-0701-40be-ad01-2b0a5464fb73
+- has_gaze: false
+
+Snow sledding
+- video_uid: ede3176b-2e12-4d2d-b9e2-40a2c4e93916
+- has_gaze: false
+
+Going to the park
+- video_uid: 23ac2590-b25f-4718-8c9b-89d32eb992b2
+- has_gaze: false
+
+Has Gaze (not used by NWM)
+=================================================================
+Playing cards
+- video_uid: 2bb31b69-fcda-4f54-8338-f590944df999
+
+Playing board games
+- video_uid: 30294c41-c90d-438a-af19-c1c74787d06b
+
+Practicing a musical instrument
+- video_uid: 4e07da0c-450f-4c37-95e9-e793cb5d8f7f

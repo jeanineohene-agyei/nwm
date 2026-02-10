@@ -237,7 +237,7 @@ class CDiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, x, t, y, x_cond, rel_t):
+    def forward(self, x, t, x_cond, rel_t):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -278,9 +278,10 @@ class CDiT(nn.Module):
         x_cond = x_cond_tokens.flatten(1, 2)
 
         t = self.t_embedder(t[..., None])
-        y = self.y_embedder(y) 
+        # y = self.y_embedder(y) 
         time_emb = self.time_embedder(rel_t[..., None])
-        c = t + time_emb + y # if training on unlabeled data, dont add y.
+        c = t + time_emb
+        # c = t + time_emb + y # if training on unlabeled data, dont add y.
 
         for block in self.blocks:
             x = block(x, c, x_cond)

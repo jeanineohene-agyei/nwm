@@ -3,7 +3,7 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
-#from distributed import init_distributed
+from distributed import init_distributed
 import torch
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -80,10 +80,14 @@ def model_forward_wrapper(all_models, curr_obs, curr_delta, num_timesteps, laten
         x_cond = x[:, :num_cond].unsqueeze(1).expand(B, num_goals, num_cond, x.shape[2], x.shape[3], x.shape[4]).flatten(0, 1)
         z = torch.randn(B*num_goals, 4, latent_size, latent_size, device=device)
         y = y.flatten(0, 1)
-        model_kwargs = dict(y=y, x_cond=x_cond, rel_t=rel_t)      
+        # model_kwargs = dict(y=y, x_cond=x_cond, rel_t=rel_t)  
+        model_kwargs = dict(x_cond=x_cond, rel_t=rel_t)       
         samples = diffusion.p_sample_loop(
                 model.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=progress, device=device
         )
+        
+        print("[decoded samples]", "mean:", samples.mean().item(), "std:", samples.std().item(),)
+        
         samples = vae.decode(samples / 0.18215).sample
 
         return torch.clip(samples, -1., 1.)

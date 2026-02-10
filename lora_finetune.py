@@ -1,13 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-# --------------------------------------------------------
-# References:
-# NoMaD, GNM, ViNT: https://github.com/robodhruv/visualnav-transformer
-# --------------------------------------------------------
-
 from isolated_nwm_infer import model_forward_wrapper
 import torch
 # the first flag below was False when we tested this script but True makes A100 training a lot faster:
@@ -32,27 +22,17 @@ from torch.utils.data import DataLoader, ConcatDataset
 from torch.utils.data.distributed import DistributedSampler
 from diffusers.models import AutoencoderKL
 
+from lora_utils import add_lora_to_cdit, freeze_all_params
+
 from distributed import init_distributed
 from models import CDiT_models
 from diffusion import create_diffusion
 from datasets import TrainingDataset
 from misc import transform
-from foveation import foveate_image
-
-from torchvision.utils import save_image
-import os
 
 #################################################################################
 #                             Training Helper Functions                         #
 #################################################################################
-@torch.no_grad()
-def decode_latents(vae, latents):
-    # latents: (B, 4, H/8, W/8)
-    latents = latents / 0.18215
-    imgs = vae.decode(latents).sample   # (-1..1)
-    imgs = imgs.clamp(-1, 1)
-    return imgs
-
 
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
@@ -147,7 +127,11 @@ def main(args):
     
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
     lr = float(config.get('lr', 1e-4))
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0)
+    # opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0)
+    
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=0)
+    print("Trainable params:", sum(p.numel() for p in trainable_params))
 
     bfloat_enable = bool(hasattr(args, 'bfloat16') and args.bfloat16)
     if bfloat_enable:
@@ -163,7 +147,7 @@ def main(args):
             raise ValueError("Resuming from checkpoint, this might override latest.pth.tar!!")
         latest_path = latest_path if os.path.isfile(latest_path) else config.get('from_checkpoint', 0)
         print("Loading model from ", latest_path)
-        device = torch.device(f"cuda:{device}" if torch.cuda.is_available() else "cpu")
+        device = torch.device(f"cuda:{device}") if isinstance(device, int) else device
         latest_checkpoint = torch.load(latest_path, map_location=device, weights_only=False) 
 
         if "model" in latest_checkpoint:
@@ -177,10 +161,10 @@ def main(args):
         else:
             update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
 
-        if "opt" in latest_checkpoint:
-            opt_ckp = {k.replace('_orig_mod.', ''):v for k,v in latest_checkpoint['opt'].items()}
-            opt.load_state_dict(opt_ckp)
-            print("Loading optimizer params")
+        # if "opt" in latest_checkpoint:
+        #     opt_ckp = {k.replace('_orig_mod.', ''):v for k,v in latest_checkpoint['opt'].items()}
+        #     opt.load_state_dict(opt_ckp)
+        #     print("Loading optimizer params")
         
         if "epoch" in latest_checkpoint:
             start_epoch = latest_checkpoint['epoch'] + 1
@@ -188,13 +172,34 @@ def main(args):
         if "train_steps" in latest_checkpoint:
             train_steps = latest_checkpoint["train_steps"]
         
-        if "scaler" in latest_checkpoint:
-            scaler.load_state_dict(latest_checkpoint["scaler"])
+        # if "scaler" in latest_checkpoint:
+        #     scaler.load_state_dict(latest_checkpoint["scaler"])
         
+    if config.get("use_lora", False):
+        # freeze base weights
+        freeze_all_params(model)
+
+        # embeddings
+        model.pos_embed.requires_grad = True
+        for p in model.t_embedder.mlp.parameters():
+            p.requires_grad = True
+        for p in model.time_embedder.mlp.parameters():
+            p.requires_grad = True
+
+        # output head
+        for p in model.final_layer.linear.parameters():
+            p.requires_grad = True
+
+        # LoRA
+        model = add_lora_to_cdit(model)
+        
+        ema = deepcopy(model).to(device)
+        requires_grad(ema, False)
+
     # ~40% speedup but might leads to worse performance depending on pytorch version
     if args.torch_compile:
         model = torch.compile(model)
-    model = DDP(model, device_ids=[device], find_unused_parameters=True,)
+    model = DDP(model, device_ids=[device], find_unused_parameters=True)
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
     logger.info(f"CDiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
@@ -203,6 +208,8 @@ def main(args):
 
     for dataset_name in config["datasets"]:
         data_config = config["datasets"][dataset_name]
+        
+        print(f"Preparing dataset: {dataset_name}")
 
         for data_split_type in ["train", "test"]:
             if data_split_type in data_config:
@@ -290,60 +297,21 @@ def main(args):
                 with torch.no_grad():
                     # Map input images to latent space + normalize latents:
                     B, T = x.shape[:2]
-                    x_flat = x.flatten(0,1)  # x_flat formerly x
-                    
-                    x_global_pix, x_fovea_pix = foveate_image(x_flat)
-                    
-                    lat_global = tokenizer.encode(x_global_pix).latent_dist.sample().mul_(0.18215)
-                    lat_fovea  = tokenizer.encode(x_fovea_pix ).latent_dist.sample().mul_(0.18215)
-                    
-                    lat_global = lat_global.unflatten(0, (B, T))   # (B, T, 4, H/8, W/8)
-                    lat_fovea  = lat_fovea.unflatten(0, (B, T))
-                    
-                    lat_target = tokenizer.encode(x_flat).latent_dist.sample().mul_(0.18215)  # lat_target formerly x
-                    lat_target = lat_target.unflatten(0, (B, T))
+                    x = x.flatten(0,1)
+                    x = tokenizer.encode(x).latent_dist.sample().mul_(0.18215)
+                    x = x.unflatten(0, (B, T))
                 
                 num_goals = T - num_cond
-                # x_start = x[:, num_cond:].flatten(0, 1)
-                x_start = lat_target[:, num_cond:].flatten(0, 1)
-                
-                 # contexts (condition frames)
-                x_global_ctx = lat_global[:, :num_cond]
-                x_fovea_ctx  = lat_fovea[:,  :num_cond]
-                
-                x_cond = torch.stack([x_global_ctx, x_fovea_ctx], dim=2)
-
-                # -----------------------------
-                # 7) Expand over prediction horizon
-                # -----------------------------
-                x_cond = x_cond.unsqueeze(1).expand(B, num_goals, num_cond, 2, lat_global.shape[2], lat_global.shape[3], lat_global.shape[4],).flatten(0, 1)
-
-                # final flatten to match diffusion API
-                # x_cond = x_cond.flatten(0, 1)
-            
-                # x_cond = x[:, :num_cond].unsqueeze(1).expand(B, num_goals, num_cond, x.shape[2], x.shape[3], x.shape[4]).flatten(0, 1)
-                
+                x_start = x[:, num_cond:].flatten(0, 1)
+                x_cond = x[:, :num_cond].unsqueeze(1).expand(B, num_goals, num_cond, x.shape[2], x.shape[3], x.shape[4]).flatten(0, 1)
                 y = y.flatten(0, 1)
                 rel_t = rel_t.flatten(0, 1)
+                
                 t = torch.randint(0, diffusion.num_timesteps, (x_start.shape[0],), device=device)
+                # model_kwargs = dict(y=y, x_cond=x_cond, rel_t=rel_t)
                 model_kwargs = dict(x_cond=x_cond, rel_t=rel_t)
-                loss_dict = diffusion.training_losses(model, x_start, t, model_kwargs)
+                loss_dict = diffusion.training_losses(model, x_start, t, model_kwargs=model_kwargs)
                 loss = loss_dict["loss"].mean()
-                
-                
-                if train_steps == 0 and rank == 0:
-                    os.makedirs("foveation_debug", exist_ok=True)
-
-                    # decode the first 4 context frames
-                    orig = decode_latents(tokenizer,
-                            tokenizer.encode(x[0, :4]).latent_dist.sample().mul_(0.18215))
-
-                    g = decode_latents(tokenizer, lat_global[0, :4])
-                    f = decode_latents(tokenizer, lat_fovea[0, :4])
-
-                    save_image((orig+1)*0.5, "foveation_debug/original.png")
-                    save_image((g+1)*0.5,    "foveation_debug/global.png")
-                    save_image((f+1)*0.5,    "foveation_debug/fovea.png")
 
             opt.zero_grad()
             if not bfloat_enable:
@@ -398,6 +366,12 @@ def main(args):
                         checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pth.tar"
                         torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
+                    
+                    if config.get("use_lora", False):
+                        # Save LoRA adapter weights
+                        adapter_dir = os.path.join(checkpoint_dir, f"lora_{train_steps:07d}")
+                        os.makedirs(adapter_dir, exist_ok=True)
+                        model.module.save_pretrained(adapter_dir)
             
             if train_steps % args.eval_every == 0 and train_steps > 0:
                 eval_start_time = time()
