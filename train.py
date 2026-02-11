@@ -37,22 +37,10 @@ from models import CDiT_models
 from diffusion import create_diffusion
 from datasets import TrainingDataset
 from misc import transform
-from foveation import foveate_image
-
-from torchvision.utils import save_image
-import os
 
 #################################################################################
 #                             Training Helper Functions                         #
 #################################################################################
-@torch.no_grad()
-def decode_latents(vae, latents):
-    # latents: (B, 4, H/8, W/8)
-    latents = latents / 0.18215
-    imgs = vae.decode(latents).sample   # (-1..1)
-    imgs = imgs.clamp(-1, 1)
-    return imgs
-
 
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
@@ -174,8 +162,16 @@ def main(args):
             model_ckp = {k.replace('_orig_mod.', ''):v for k,v in latest_checkpoint['ema'].items()}
             res = ema.load_state_dict(model_ckp, strict=True)
             print("Loading EMA model weights", res)
-        else:
-            update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
+        elif "ema" in latest_checkpoint:
+            model_ckp = {k.replace('_orig_mod.', ''):v for k,v in latest_checkpoint['ema'].items()}
+            res = model.load_state_dict(model_ckp, strict=True)
+            print("Loading model weights", res)
+
+            model_ckp = {k.replace('_orig_mod.', ''):v for k,v in latest_checkpoint['ema'].items()}
+            res = ema.load_state_dict(model_ckp, strict=True)
+            print("Loading EMA model weights", res)
+
+
 
         if "opt" in latest_checkpoint:
             opt_ckp = {k.replace('_orig_mod.', ''):v for k,v in latest_checkpoint['opt'].items()}
@@ -194,7 +190,7 @@ def main(args):
     # ~40% speedup but might leads to worse performance depending on pytorch version
     if args.torch_compile:
         model = torch.compile(model)
-    model = DDP(model, device_ids=[device], find_unused_parameters=True,)
+    model = DDP(model, device_ids=[device])
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
     logger.info(f"CDiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
@@ -290,60 +286,20 @@ def main(args):
                 with torch.no_grad():
                     # Map input images to latent space + normalize latents:
                     B, T = x.shape[:2]
-                    x_flat = x.flatten(0,1)  # x_flat formerly x
-                    
-                    x_global_pix, x_fovea_pix = foveate_image(x_flat)
-                    
-                    lat_global = tokenizer.encode(x_global_pix).latent_dist.sample().mul_(0.18215)
-                    lat_fovea  = tokenizer.encode(x_fovea_pix ).latent_dist.sample().mul_(0.18215)
-                    
-                    lat_global = lat_global.unflatten(0, (B, T))   # (B, T, 4, H/8, W/8)
-                    lat_fovea  = lat_fovea.unflatten(0, (B, T))
-                    
-                    lat_target = tokenizer.encode(x_flat).latent_dist.sample().mul_(0.18215)  # lat_target formerly x
-                    lat_target = lat_target.unflatten(0, (B, T))
+                    x = x.flatten(0,1)
+                    x = tokenizer.encode(x).latent_dist.sample().mul_(0.18215)
+                    x = x.unflatten(0, (B, T))
                 
                 num_goals = T - num_cond
-                # x_start = x[:, num_cond:].flatten(0, 1)
-                x_start = lat_target[:, num_cond:].flatten(0, 1)
-                
-                 # contexts (condition frames)
-                x_global_ctx = lat_global[:, :num_cond]
-                x_fovea_ctx  = lat_fovea[:,  :num_cond]
-                
-                x_cond = torch.stack([x_global_ctx, x_fovea_ctx], dim=2)
-
-                # -----------------------------
-                # 7) Expand over prediction horizon
-                # -----------------------------
-                x_cond = x_cond.unsqueeze(1).expand(B, num_goals, num_cond, 2, lat_global.shape[2], lat_global.shape[3], lat_global.shape[4],).flatten(0, 1)
-
-                # final flatten to match diffusion API
-                # x_cond = x_cond.flatten(0, 1)
-            
-                # x_cond = x[:, :num_cond].unsqueeze(1).expand(B, num_goals, num_cond, x.shape[2], x.shape[3], x.shape[4]).flatten(0, 1)
-                
+                x_start = x[:, num_cond:].flatten(0, 1)
+                x_cond = x[:, :num_cond].unsqueeze(1).expand(B, num_goals, num_cond, x.shape[2], x.shape[3], x.shape[4]).flatten(0, 1)
                 y = y.flatten(0, 1)
                 rel_t = rel_t.flatten(0, 1)
+                
                 t = torch.randint(0, diffusion.num_timesteps, (x_start.shape[0],), device=device)
-                model_kwargs = dict(x_cond=x_cond, rel_t=rel_t)
+                model_kwargs = dict(y=y, x_cond=x_cond, rel_t=rel_t)
                 loss_dict = diffusion.training_losses(model, x_start, t, model_kwargs)
                 loss = loss_dict["loss"].mean()
-                
-                
-                if train_steps == 0 and rank == 0:
-                    os.makedirs("foveation_debug", exist_ok=True)
-
-                    # decode the first 4 context frames
-                    orig = decode_latents(tokenizer,
-                            tokenizer.encode(x[0, :4]).latent_dist.sample().mul_(0.18215))
-
-                    g = decode_latents(tokenizer, lat_global[0, :4])
-                    f = decode_latents(tokenizer, lat_fovea[0, :4])
-
-                    save_image((orig+1)*0.5, "foveation_debug/original.png")
-                    save_image((g+1)*0.5,    "foveation_debug/global.png")
-                    save_image((f+1)*0.5,    "foveation_debug/fovea.png")
 
             opt.zero_grad()
             if not bfloat_enable:
@@ -394,19 +350,18 @@ def main(args):
                         checkpoint.update({"scaler": scaler.state_dict()})
                     checkpoint_path = f"{checkpoint_dir}/latest.pth.tar"
                     torch.save(checkpoint, checkpoint_path)
-                    if train_steps % (10*args.ckpt_every) == 0 and train_steps > 0:
-                        checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pth.tar"
-                        torch.save(checkpoint, checkpoint_path)
+                    checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pth.tar"
+                    torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
             
-            if train_steps % args.eval_every == 0 and train_steps > 0:
-                eval_start_time = time()
-                save_dir = os.path.join(experiment_dir, str(train_steps))
-                sim_score = evaluate(ema, tokenizer, diffusion, test_dataset, rank, config["batch_size"], config["num_workers"], latent_size, device, save_dir, args.global_seed, bfloat_enable, num_cond)
-                dist.barrier()
-                eval_end_time = time()
-                eval_time = eval_end_time - eval_start_time
-                logger.info(f"(step={train_steps:07d}) Perceptual Loss: {sim_score:.4f}, Eval Time: {eval_time:.2f}")
+            # if train_steps % args.eval_every == 0 and train_steps > 0:
+            #     eval_start_time = time()
+            #     save_dir = os.path.join(experiment_dir, str(train_steps))
+            #     sim_score = evaluate(ema, tokenizer, diffusion, test_dataset, rank, config["batch_size"], config["num_workers"], latent_size, device, save_dir, args.global_seed, bfloat_enable, num_cond)
+            #     dist.barrier()
+            #     eval_end_time = time()
+            #     eval_time = eval_end_time - eval_start_time
+            #     logger.info(f"(step={train_steps:07d}) Perceptual Loss: {sim_score:.4f}, Eval Time: {eval_time:.2f}")
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
@@ -415,70 +370,13 @@ def main(args):
     cleanup()
 
 
-@torch.no_grad
-def evaluate(model, vae, diffusion, test_dataloaders, rank, batch_size, num_workers, latent_size, device, save_dir, seed, bfloat_enable, num_cond):
-    sampler = DistributedSampler(
-        test_dataloaders,
-        num_replicas=dist.get_world_size(),
-        rank=rank,
-        shuffle=True,
-        seed=seed
-    )
-    loader = DataLoader(
-        test_dataloaders,
-        batch_size=batch_size,
-        shuffle=False,
-        sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True
-    )
-    from dreamsim import dreamsim
-    eval_model, _ = dreamsim(pretrained=True)
-    score = torch.tensor(0.).to(device)
-    n_samples = torch.tensor(0).to(device)
-
-    # Run for 1 step
-    for x, y, rel_t in loader:
-        x = x.to(device)
-        y = y.to(device)
-        rel_t = rel_t.to(device).flatten(0, 1)
-        with torch.amp.autocast('cuda', enabled=True, dtype=torch.bfloat16):
-            B, T = x.shape[:2]
-            num_goals = T - num_cond
-            samples = model_forward_wrapper((model, diffusion, vae), x, y, num_timesteps=None, latent_size=latent_size, device=device, num_cond=num_cond, num_goals=num_goals, rel_t=rel_t)
-            x_start_pixels = x[:, num_cond:].flatten(0, 1)
-            x_cond_pixels = x[:, :num_cond].unsqueeze(1).expand(B, num_goals, num_cond, x.shape[2], x.shape[3], x.shape[4]).flatten(0, 1)
-            samples = samples * 0.5 + 0.5
-            x_start_pixels = x_start_pixels * 0.5 + 0.5
-            x_cond_pixels = x_cond_pixels * 0.5 + 0.5
-            res = eval_model(x_start_pixels, samples)
-            score += res.sum()
-            n_samples += len(res)
-        break
-    
-    if rank == 0:
-        os.makedirs(save_dir, exist_ok=True)
-        for i in range(min(samples.shape[0], 10)):
-            _, ax = plt.subplots(1,3,dpi=256)
-            ax[0].imshow((x_cond_pixels[i, -1].permute(1,2,0).cpu().numpy()*255).astype('uint8'))
-            ax[1].imshow((x_start_pixels[i].permute(1,2,0).cpu().numpy()*255).astype('uint8'))
-            ax[2].imshow((samples[i].permute(1,2,0).cpu().float().numpy()*255).astype('uint8'))
-            plt.savefig(f'{save_dir}/{i}.png')
-            plt.close()
-
-    dist.all_reduce(score)
-    dist.all_reduce(n_samples)
-    sim_score = score/n_samples
-    return sim_score
-
 def get_args_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--epochs", type=int, default=300)
     # parser.add_argument("--global-batch-size", type=int, default=256)
     parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--log-every", type=int, default=100)
+    parser.add_argument("--log-every", type=int, default=1)
     parser.add_argument("--ckpt-every", type=int, default=2000)
     parser.add_argument("--eval-every", type=int, default=5000)
     parser.add_argument("--bfloat16", type=int, default=1)

@@ -1,0 +1,20 @@
+[project]
+name = "nwm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "accelerate>=1.12.0",
+    "diffusers>=0.36.0",
+    "dreamsim>=0.2.1",
+    "loguru>=0.7.3",
+    "matplotlib>=3.10.8",
+    "numpy>=2.3.5",
+    "opencv-python>=4.11.0.86",
+    "submitit>=1.5.4",
+    "timm>=1.0.24",
+    "torch>=2.10.0",
+    "torcheval>=0.0.7",
+    "torchvision>=0.25.0",
+]

@@ -1,0 +1,6 @@
+CUDA_VISIBLE_DEVICES=0,1 \
+uv run \
+train.py   \
+--config config/ian_finetune.yaml   \
+--ckpt-every 300   \
+--epochs 200    

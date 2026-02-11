@@ -14,9 +14,6 @@ import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 
-from torchvision.utils import save_image
-import os
-
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
@@ -155,20 +152,11 @@ class CDiT(nn.Module):
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.patch_size = patch_size
         self.num_heads = num_heads
-        
-        self.debug_global = None
-        self.debug_fovea  = None
-
-        self.fuse_linear = nn.Linear(2 * hidden_size, hidden_size)
-        
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
-        
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = ActionEmbedder(hidden_size)
-        
         num_patches = self.x_embedder.num_patches
         self.pos_embed = nn.Parameter(torch.zeros(self.context_size + 1, num_patches, hidden_size), requires_grad=True) # for context and for predicted frame
-        
         self.blocks = nn.ModuleList([CDiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.time_embedder = TimestepEmbedder(hidden_size)
@@ -228,8 +216,6 @@ class CDiT(nn.Module):
         c = self.out_channels
         p = self.x_embedder.patch_size[0]
         h = w = int(x.shape[1] ** 0.5)
-        # print(f"X xhape: {x.shape[1]}")
-        # print(f"H*W:{h*w}")
         assert h * w == x.shape[1]
 
         x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
@@ -237,7 +223,7 @@ class CDiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, x, t, x_cond, rel_t):
+    def forward(self, x, t, y, x_cond, rel_t):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -245,43 +231,12 @@ class CDiT(nn.Module):
         y: (N,) tensor of class labels
         """
         x = self.x_embedder(x) + self.pos_embed[self.context_size:]
-        
-        B, T, V, C, H, W = x_cond.shape   # V should be 2
-        assert V == 2
-
-        # Split global + fovea
-        z_global = x_cond[:, :, 0]   # (B, T, 4, H, W)
-        z_fovea  = x_cond[:, :, 1]   # (B, T, 4, H, W)
-
-        # Flatten (B,T → B*T)
-        z_global = z_global.flatten(0, 1)
-        z_fovea  = z_fovea.flatten(0, 1)
-        
-        self.debug_global = z_global.detach()
-        self.debug_fovea  = z_fovea.detach()
-
-        # Patchify each
-        global_patch_cond = self.x_embedder(z_global)
-        fovea_patch_cond  = self.x_embedder(z_fovea)
-
-        # Fuse like before
-        x_cond_tokens = torch.cat([global_patch_cond, fovea_patch_cond], dim=-1)
-        x_cond_tokens = self.fuse_linear(x_cond_tokens)
-
-        # Restore time dimension
-        x_cond_tokens = x_cond_tokens.unflatten(0, (B, T))
-
-        # Add positional embedding
-        x_cond_tokens = x_cond_tokens + self.pos_embed[:self.context_size]
-
-        # Flatten to sequence
-        x_cond = x_cond_tokens.flatten(1, 2)
-
+        x_cond = self.x_embedder(x_cond.flatten(0, 1)).unflatten(0, (x_cond.shape[0], x_cond.shape[1])) + self.pos_embed[:self.context_size]  # (N, T, D), where T = H * W / patch_size ** 2.flatten(1, 2)
+        x_cond = x_cond.flatten(1, 2)
         t = self.t_embedder(t[..., None])
-        # y = self.y_embedder(y) 
+        y = self.y_embedder(y) 
         time_emb = self.time_embedder(rel_t[..., None])
-        c = t + time_emb
-        # c = t + time_emb + y # if training on unlabeled data, dont add y.
+        c = t + time_emb + y # if training on unlabeled data, dont add y.
 
         for block in self.blocks:
             x = block(x, c, x_cond)
