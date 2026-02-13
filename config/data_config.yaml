@@ -19,3 +19,6 @@ sacson:
 
 epic_kitchens:
   metric_waypoint_spacing: 1.0
+
+xvla_soft_fold:
+  metric_waypoint_spacing: 1.0

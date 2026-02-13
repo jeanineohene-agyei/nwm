@@ -29,7 +29,6 @@ wandb/
 # =====================
 # Datasets (LOCAL)
 # =====================
-datasets/
 data_splits/
 
 EPIC-KITCHENS/
@@ -38,6 +37,7 @@ soft_fold/
 soft_fold_positions/
 aloha_static_cups_open/
 walk_frames/
+xvla_soft_fold/
 
 # Raw video
 *.mp4
@@ -49,7 +49,7 @@ walk_frames/
 *.pt
 *.pth
 *.ckpt
-*.pkl
+data_splits/**/*.pkl
 
 # =====================
 # Source clarity
