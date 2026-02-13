@@ -376,7 +376,7 @@ def get_args_parser():
     parser.add_argument("--epochs", type=int, default=300)
     # parser.add_argument("--global-batch-size", type=int, default=256)
     parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--log-every", type=int, default=1)
+    parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--ckpt-every", type=int, default=2000)
     parser.add_argument("--eval-every", type=int, default=5000)
     parser.add_argument("--bfloat16", type=int, default=1)

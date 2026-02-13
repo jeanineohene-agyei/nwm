@@ -5,7 +5,7 @@ from_checkpoint: logs/nwm_cdit_xl_ego4d_pretrained/checkpoints/cdit_xl_ego4d_200
 # training setup
 results_dir: logs
 train: True
-batch_size: 16
+batch_size: 4
 num_workers: 12
 model: CDiT-XL/2
 lr: 8e-5
